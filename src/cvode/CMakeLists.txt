@@ -92,6 +92,7 @@ ADD_PREFIX(${sundials_SOURCE_DIR}/include/cvode/ cvode_HEADERS)
 # implementation only header files.
 INCLUDE_DIRECTORIES(.)
 INCLUDE_DIRECTORIES(../sundials)
+INCLUDE_DIRECTORIES(/usr/local/cuda-9.2/include)
 
 # Define C preprocessor flag -DBUILD_SUNDIALS_LIBRARY 
 ADD_DEFINITIONS(-DBUILD_SUNDIALS_LIBRARY)
