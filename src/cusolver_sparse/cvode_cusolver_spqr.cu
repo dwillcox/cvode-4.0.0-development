@@ -34,7 +34,8 @@
  cv_cuSolver_SetLinearSolver sets which cuSolver solver to use.
 -------------------------------------------------------------------*/
 
-int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method)
+int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
+				bool store_jacobian = true)
 {
   CVodeMem cv_mem;
   CV_cuSolver_Mem cv_cus_mem;
@@ -104,12 +105,27 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method)
   /* Allocate cuSolver system and workspace structs */
   cv_cus_mem->cus_work = (CV_cuSolver_workspace_QR) malloc(sizeof(struct CV_cuSolver_workspace_QR_t));
   cv_cus_mem->csr_sys  = (CV_cuSolver_csr_sys) malloc(sizeof(struct CV_cuSolver_csr_sys_t));
+
+  cv_cus_mem->store_jacobian = static_cast<booleantype>(store_jacobian);
+
+  if (cv_cus_mem->store_jacobian) {
+    cv_cus_mem->saved_jacobian = (CV_cuSolver_csr_sys) malloc(sizeof(struct CV_cuSolver_csr_sys_t));
+  } else {
+    cv_cus_mem->saved_jacobian = NULL;
+  }
   
   /* Set pointers in cv_cuSolver memory structure to NULL */
   cv_cus_mem->cus_work->workspace = NULL;
+
   cv_cus_mem->csr_sys->d_csr_row_count = NULL;
   cv_cus_mem->csr_sys->d_csr_col_index = NULL;
   cv_cus_mem->csr_sys->d_csr_values = NULL;
+
+  if (cv_cus_mem->store_jacobian) {
+    cv_cus_mem->saved_jacobian->d_csr_row_count = NULL;
+    cv_cus_mem->saved_jacobian->d_csr_col_index = NULL;
+    cv_cus_mem->saved_jacobian->d_csr_values = NULL;
+  }
 
   /* Attach linear solver memory to integrator memory */
   cv_mem->cv_lmem = cv_cus_mem;
@@ -195,6 +211,13 @@ int cv_cuSolver_GetWorkSpace(void *cvode_mem, long int *lenrwLS,
     *lenrwLS += cv_cus_mem->csr_sys->csr_number_nonzero*cv_cus_mem->csr_sys->number_subsystems;
     *leniwLS += cv_cus_mem->csr_sys->csr_number_nonzero;
     *leniwLS += cv_cus_mem->csr_sys->size_per_subsystem + 1;
+  }
+
+  // Saved J storage
+  if (cv_cus_mem->saved_jacobian != NULL) {
+    *lenrwLS += cv_cus_mem->saved_jacobian->csr_number_nonzero*cv_cus_mem->saved_jacobian->number_subsystems;
+    *leniwLS += cv_cus_mem->saved_jacobian->csr_number_nonzero;
+    *leniwLS += cv_cus_mem->saved_jacobian->size_per_subsystem + 1;
   }
 
   // cuSolver workspace
@@ -286,6 +309,9 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 
   /* Set Jacobian evaluation user data */
   cv_cus_mem->J_data = cvode_mem->cv_user_data;
+  cv_cus_mem->nstlj  = 0;
+  cv_cuSolver_InitializeCounters(cv_cus_mem);
+
 
   // Make handle for cuSolver if it doesn't already exist
 #if PRINT_CUSOLVER_DEBUGGING
@@ -338,9 +364,11 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
   -----------------------------------------------------------------
   This must be called AFTER THE USER CALLS cv_cuSolver_CSR_SetSizes
 
-  This routine always calculates a new Jacobian matrix (storage not
-  yet implemented) and creates the system matrix A from this, the
-  'gamma' factor and the identity matrix, 
+  This routine first checks to see if we can use a stored
+  Jacobian using the same criteria as for the CVODE direct solver.
+
+  This routine calculates a new Jacobian matrix if needed and makes
+  the system matrix A from J, the 'gamma' factor and the identity:
     A = I-gamma*J.
   This routine then initializes the cuSolver linear solver memory.
   -----------------------------------------------------------------*/
@@ -353,9 +381,11 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
   std::cout << "Doing cv_cuSolver_Setup" << std::endl;  
 #endif
 
+  booleantype jbad, jgood;
   realtype dgamma;
   CV_cuSolver_Mem cv_cus_mem;
   int retval;
+  cudaError_t cuda_status = cudaSuccess;
 
   /* Return immediately if cvode_mem or cvode_mem->cv_lmem are NULL */
   if (cvode_mem == NULL) {
@@ -371,35 +401,70 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
   cv_cus_mem = (CV_cuSolver_Mem) cvode_mem->cv_lmem;
 
   // This is where we could decide whether to use a stored J instead
-  
-  // Calculate Jacobian matrix
-  cv_cus_mem->nje++;
-  *jcurPtr = SUNTRUE;
+  /* Use nst, gamma/gammap, and convfail to set J eval. flag jgood */
+  dgamma = SUNRabs((cvode_mem->cv_gamma/cvode_mem->cv_gammap) - ONE);
+  jbad = (cvode_mem->cv_nst == 0) ||
+    (cvode_mem->cv_nst > cv_cus_mem->nstlj + CV_CUSOLVER_MSBJ) ||
+    ((convfail == CV_FAIL_BAD_J) && (dgamma < CV_CUSOLVER_DGMAX)) ||
+    (convfail == CV_FAIL_OTHER);
+  jgood = (!jbad) && cv_cus_mem->store_jacobian;
 
-  retval = cv_cus_mem->jac(cvode_mem->cv_tn, ypred, 
-			   fpred, cv_cus_mem->csr_sys, 
-			   cv_cus_mem->J_data);
-  if (retval < 0) {
-    cvProcessError(cvode_mem, CV_CUSOLVER_JACFUNC_UNRECVR, "CV_CUSOLVER", 
-		   "cv_cuSolver_Setup",  MSGD_JACFUNC_FAILED);
-    cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_UNRECVR;
+  /* If jgood = SUNTRUE, use saved copy of J */
+  if (jgood) {
+    *jcurPtr = SUNFALSE;
+    
+    // Copy saved J into the linear system to solve
+    cuda_status = cudaMemcpy(cv_cus_mem->csr_sys->d_csr_values,
+			     cv_cus_mem->saved_jacobian->d_csr_values,
+			     sizeof(realtype) * cv_cus_mem->csr_sys->csr_number_nonzero * cv_cus_mem->csr_sys->number_subsystems,
+			     cudaMemcpyDeviceToDevice);
+
+    if (cuda_status != cudaSuccess) {
+      cvProcessError(cvode_mem, CV_CUSOLVER_JACCOPY_UNRECVR, "CV_CUSOLVER",
+		     "cv_cuSolver_Setup",  MSGD_JACCOPY_FAILED);
+      cv_cus_mem->last_flag = CV_CUSOLVER_JACCOPY_UNRECVR;
+      return(-1);
+    }
+    /* If jgood = SUNFALSE, call jac routine for new J value */
+  } else {
+    // Calculate Jacobian matrix  
+    cv_cus_mem->nje++;
+    cv_cus_mem->nstlj = cvode_mem->cv_nst;    
+    *jcurPtr = SUNTRUE;
+
+    retval = cv_cus_mem->jac(cvode_mem->cv_tn, ypred, 
+			     fpred, cv_cus_mem->csr_sys, 
+			     cv_cus_mem->J_data);
+    if (retval < 0) {
+      cvProcessError(cvode_mem, CV_CUSOLVER_JACFUNC_UNRECVR, "CV_CUSOLVER", 
+		     "cv_cuSolver_Setup",  MSGD_JACFUNC_FAILED);
+      cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_UNRECVR;
 #if PRINT_CUSOLVER_DEBUGGING
-    std::cout << "Jacobian evaluation error. Returning." << std::endl;
-    std::cout << "Finished cv_cuSolver_Setup" << std::endl;
+      std::cout << "Jacobian evaluation error. Returning." << std::endl;
+      std::cout << "Finished cv_cuSolver_Setup" << std::endl;
 #endif
-    return(-1);
-  }
-  if (retval > 0) {
-    cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_RECVR;
+      return(-1);
+    }
+    if (retval > 0) {
+      cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_RECVR;
 #if PRINT_CUSOLVER_DEBUGGING
-    std::cout << "Jacobian evaluation recoverable error. Returning." << std::endl;
-    std::cout << "Finished cv_cuSolver_Setup" << std::endl;
+      std::cout << "Jacobian evaluation recoverable error. Returning." << std::endl;
+      std::cout << "Finished cv_cuSolver_Setup" << std::endl;
 #endif
-    return(1);
+      return(1);
+    }
+
+    if (cv_cus_mem->store_jacobian) {
+      // Copy J to keep it around after we're done with this solve
+      cuda_status = cudaMemcpy(cv_cus_mem->saved_jacobian->d_csr_values,
+			       cv_cus_mem->csr_sys->d_csr_values,
+			       sizeof(realtype) * cv_cus_mem->csr_sys->csr_number_nonzero * cv_cus_mem->csr_sys->number_subsystems,
+			       cudaMemcpyDeviceToDevice);
+      assert(cuda_status == cudaSuccess);
+    }
+
   }
   
-  // This is where we could make a copy of J to keep around
-
   /* Scale and add I to get A = I - gamma*J */
   retval = cv_cuSolver_ScaleAddI(-cvode_mem->cv_gamma, cv_cus_mem);
   if (retval) {
@@ -531,7 +596,25 @@ int cv_cuSolver_Free(CVodeMem cv_mem)
   -----------------------------------------------------------------*/
 int cv_cuSolver_InitializeCounters(CV_cuSolver_Mem cv_cus_mem)
 {
+
+  // Number of Jacobian evaluations
   cv_cus_mem->nje = 0;
+
+  return(0);
+}
+
+
+/*-----------------------------------------------------------------
+  cv_cuSolver_GetNumJacEvals
+  -----------------------------------------------------------------
+  Get the number of Jacobian evaluations we have done.
+  -----------------------------------------------------------------*/
+int cv_cuSolver_GetNumJacEvals(void* cv_mem, int* nje)
+{
+  CVodeMem cvode_mem = (CVodeMem) cv_mem;
+  CV_cuSolver_Mem cv_cus_mem = (CV_cuSolver_Mem) cvode_mem->cv_lmem;
+  *nje = cv_cus_mem->nje;
+
   return(0);
 }
 
@@ -704,20 +787,19 @@ int cv_cuSolver_CSR_SetSizes(void* cv_mem, int size_per_subsystem,
   
   CVodeMem cvode_mem = (CVodeMem) cv_mem;
   CV_cuSolver_Mem cv_cus_mem = (CV_cuSolver_Mem) cvode_mem->cv_lmem;
-  CV_cuSolver_csr_sys csr_sys = cv_cus_mem->csr_sys;
 
-  // Return with an error if memory is already allocated.
-  // That is, you cannot change these values after setting them
-  // to avoid memory leaks.
-  if (csr_sys->d_csr_values == NULL &&
-      csr_sys->d_csr_col_index == NULL &&
-      csr_sys->d_csr_row_count == NULL) {
-  
-    csr_sys->size_per_subsystem = size_per_subsystem;
-    csr_sys->csr_number_nonzero = csr_number_nonzero;
-    csr_sys->number_subsystems  = number_subsystems;
+  int retval1 = CV_CUSOLVER_SUCCESS;
+  int retval2 = CV_CUSOLVER_SUCCESS;
 
-  } else {
+  retval1 = cv_cuSolver_CSR_SetSizes_Matrix(cv_cus_mem->csr_sys, size_per_subsystem,
+					    csr_number_nonzero, number_subsystems);
+
+  if (cv_cus_mem->store_jacobian) {
+    retval2 = cv_cuSolver_CSR_SetSizes_Matrix(cv_cus_mem->saved_jacobian, size_per_subsystem,
+					      csr_number_nonzero, number_subsystems);
+  }
+
+  if (retval1 != CV_CUSOLVER_SUCCESS || retval2 != CV_CUSOLVER_SUCCESS) {
     cvProcessError(cvode_mem, CV_CUSOLVER_MEM_FAIL, "CV_CUSOLVER", 
                    "CV_cuSolver_CSR_SetSizes", MSGD_MEM_FAIL);
     cv_cuSolver_WorkspaceFree(cv_cus_mem);
@@ -734,6 +816,30 @@ int cv_cuSolver_CSR_SetSizes(void* cv_mem, int size_per_subsystem,
 }
 
 
+int cv_cuSolver_CSR_SetSizes_Matrix(CV_cuSolver_csr_sys csr_sys, int size_per_subsystem,
+				    int csr_number_nonzero, int number_subsystems)
+{
+  // Return with an error if memory is already allocated.
+  // That is, you cannot change these values after setting them
+  // to avoid memory leaks.  
+  if (csr_sys->d_csr_values == NULL &&
+      csr_sys->d_csr_col_index == NULL &&
+      csr_sys->d_csr_row_count == NULL) {
+  
+    csr_sys->size_per_subsystem = size_per_subsystem;
+    csr_sys->csr_number_nonzero = csr_number_nonzero;
+    csr_sys->number_subsystems  = number_subsystems;
+
+    return(CV_CUSOLVER_SUCCESS);
+
+  } else {
+
+    return(CV_CUSOLVER_MEM_FAIL);
+
+  }
+}
+
+
 /*-----------------------------------------------------------------
   cv_cuSolver_SystemInitialize
   -----------------------------------------------------------------
@@ -745,8 +851,17 @@ int cv_cuSolver_SystemInitialize(void* cv_mem, int* csr_row_count, int* csr_col_
 {
   CVodeMem cvode_mem = (CVodeMem) cv_mem;
   CV_cuSolver_Mem cv_cus_mem = (CV_cuSolver_Mem) cvode_mem->cv_lmem;
-  CV_cuSolver_csr_sys csr_sys = cv_cus_mem->csr_sys;
 
+  cv_cuSolver_csr_sys_initialize(cv_cus_mem->csr_sys, csr_row_count, csr_col_index);
+
+  if (cv_cus_mem->store_jacobian) cv_cuSolver_csr_sys_initialize(cv_cus_mem->saved_jacobian, csr_row_count, csr_col_index);
+
+  return(0);
+}
+
+
+void cv_cuSolver_csr_sys_initialize(CV_cuSolver_csr_sys csr_sys, int* csr_row_count, int* csr_col_index)
+{
   cudaError_t cuda_status = cudaSuccess;
 
   if (csr_sys->d_csr_values == NULL) {
@@ -783,8 +898,6 @@ int cv_cuSolver_SystemInitialize(void* cv_mem, int* csr_row_count, int* csr_col_
     std::cout << "Allocated device memory for d_csr_row_count and initialized" << std::endl;
 #endif
   }
-
-  return(0);
 }
 
 
@@ -1010,28 +1123,41 @@ int cv_cuSolver_WorkspaceFree(CV_cuSolver_Mem cv_cus_mem)
   -----------------------------------------------------------------*/
 int cv_cuSolver_SystemFree(CV_cuSolver_Mem cv_cus_mem)
 {
-
-  if (cv_cus_mem->csr_sys->d_csr_row_count != NULL) {
-    cudaFree(cv_cus_mem->csr_sys->d_csr_row_count);
-    cv_cus_mem->csr_sys->d_csr_row_count = NULL;    
-  }
-
-  if (cv_cus_mem->csr_sys->d_csr_col_index != NULL) {
-    cudaFree(cv_cus_mem->csr_sys->d_csr_col_index);
-    cv_cus_mem->csr_sys->d_csr_col_index = NULL;    
-  }
-
-  if (cv_cus_mem->csr_sys->d_csr_values != NULL) {
-    cudaFree(cv_cus_mem->csr_sys->d_csr_values);
-    cv_cus_mem->csr_sys->d_csr_values = NULL;    
-  }
-
+  cv_cuSolver_csr_sys_free(cv_cus_mem->csr_sys);
   free(cv_cus_mem->csr_sys);
   cv_cus_mem->csr_sys = NULL;
+
+  if (cv_cus_mem->store_jacobian) {
+    cv_cuSolver_csr_sys_free(cv_cus_mem->saved_jacobian);
+    free(cv_cus_mem->saved_jacobian);
+    cv_cus_mem->saved_jacobian = NULL;
+  }
 
   return(0);
 }
 
+
+void cv_cuSolver_csr_sys_free(CV_cuSolver_csr_sys csr_sys)
+{
+  cudaError_t cuda_status = cudaSuccess;  
+  if (csr_sys->d_csr_row_count != NULL) {
+    cuda_status = cudaFree(csr_sys->d_csr_row_count);
+    assert(cuda_status == cudaSuccess);
+    csr_sys->d_csr_row_count = NULL;    
+  }
+
+  if (csr_sys->d_csr_col_index != NULL) {
+    cuda_status = cudaFree(csr_sys->d_csr_col_index);
+    assert(cuda_status == cudaSuccess);
+    csr_sys->d_csr_col_index = NULL;
+  }
+
+  if (csr_sys->d_csr_values != NULL) {
+    cuda_status = cudaFree(csr_sys->d_csr_values);
+    assert(cuda_status == cudaSuccess);
+    csr_sys->d_csr_values = NULL;    
+  }
+}
 
 
 /*-----------------------------------------------------------------
