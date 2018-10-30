@@ -35,7 +35,8 @@
 -------------------------------------------------------------------*/
 
 int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
-				bool store_jacobian = true)
+				bool store_jacobian = true,
+				int num_steps_save_jacobian = 0)
 {
   CVodeMem cv_mem;
   CV_cuSolver_Mem cv_cus_mem;
@@ -106,7 +107,9 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   cv_cus_mem->cus_work = (CV_cuSolver_workspace_QR) malloc(sizeof(struct CV_cuSolver_workspace_QR_t));
   cv_cus_mem->csr_sys  = (CV_cuSolver_csr_sys) malloc(sizeof(struct CV_cuSolver_csr_sys_t));
 
-  cv_cus_mem->store_jacobian = static_cast<booleantype>(store_jacobian);
+  cv_cus_mem->store_jacobian = static_cast<booleantype>(store_jacobian || (num_steps_save_jacobian >= 0));
+
+  cv_cus_mem->CV_CUSOLVER_MSBJ = num_steps_save_jacobian;
 
   if (cv_cus_mem->store_jacobian) {
     cv_cus_mem->saved_jacobian = (CV_cuSolver_csr_sys) malloc(sizeof(struct CV_cuSolver_csr_sys_t));
@@ -404,7 +407,7 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
   /* Use nst, gamma/gammap, and convfail to set J eval. flag jgood */
   dgamma = SUNRabs((cvode_mem->cv_gamma/cvode_mem->cv_gammap) - ONE);
   jbad = (cvode_mem->cv_nst == 0) ||
-    (cvode_mem->cv_nst > cv_cus_mem->nstlj + CV_CUSOLVER_MSBJ) ||
+    (cvode_mem->cv_nst > cv_cus_mem->nstlj + cv_cus_mem->CV_CUSOLVER_MSBJ) ||
     ((convfail == CV_FAIL_BAD_J) && (dgamma < CV_CUSOLVER_DGMAX)) ||
     (convfail == CV_FAIL_OTHER);
   jgood = (!jbad) && cv_cus_mem->store_jacobian;

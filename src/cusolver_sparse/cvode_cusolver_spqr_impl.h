@@ -13,15 +13,13 @@ extern "C" {
 /*-----------------------------------------------------------------
   CV_CUSOLVER solver constants
   -----------------------------------------------------------------
-  CV_CUSOLVER_MSBJ   maximum number of steps between Jacobian evaluations
   CV_CUSOLVER_DGMAX  maximum change in gamma between Jacobian evaluations
   -----------------------------------------------------------------*/
 
-#define CV_CUSOLVER_MSBJ  50
 #define CV_CUSOLVER_DGMAX RCONST(0.2)
-  
+
   /*-----------------------------------------------------------------
-    Types : CV_cuSolver_MemRec, CV_cuSolver_Mem                             
+    Types : CV_cuSolver_MemRec, CV_cuSolver_Mem
     -----------------------------------------------------------------
     CV_cuSolver_Mem is pointer to a CV_cuSolver_MemRec structure.
     -----------------------------------------------------------------*/
@@ -61,11 +59,13 @@ extern "C" {
     realtype* d_csr_values;
   }* CV_cuSolver_csr_sys;
 
-  
+
   typedef int (*CV_cuSolver_JacFn)(realtype t, N_Vector y, N_Vector fy,
 				   CV_cuSolver_csr_sys Jac, void* user_data);
 
   typedef struct CV_cuSolver_MemRec {
+
+    int CV_CUSOLVER_MSBJ = 50;
 
     cuSolver_method method;            /* which cuSolver method we are using */
 
@@ -99,7 +99,7 @@ extern "C" {
 
   int cv_cuSolver_Setup(CVodeMem cv_mem, int convfail, N_Vector ypred,
 			N_Vector fpred, booleantype *jcurPtr,
-			N_Vector vtemp1, N_Vector vtemp2, N_Vector vtemp3); 
+			N_Vector vtemp1, N_Vector vtemp2, N_Vector vtemp3);
 
   int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
 			N_Vector ycur, N_Vector fcur);
@@ -108,7 +108,8 @@ extern "C" {
 
   /* user functions for working with the CSR formatted system and cuSolver */
 
-  int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method, bool store_jacobian);
+  int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
+				  bool store_jacobian, int num_steps_save_jacobian);
 
   int cv_cuSolver_SetJacFun(void *cvode_mem, CV_cuSolver_JacFn jac);
 
@@ -116,7 +117,7 @@ extern "C" {
 			       long int *leniwLS);
 
   char* cv_cuSolver_GetReturnFlagName(long int flag);
-  
+
   int cv_cuSolver_CSR_SetSizes(void* cv_mem, int size_per_subsystem,
 			       int csr_number_nonzero, int number_subsystems);
 
@@ -132,7 +133,7 @@ extern "C" {
   /* internal functions */
 
   int cv_cuSolver_InitializeCounters(CV_cuSolver_Mem cv_cus_mem);
-  
+
   int cv_cuSolver_SolverInitialize(CV_cuSolver_Mem cv_cus_mem);
 
   int cv_cuSolver_ScaleAddI(realtype scale, CV_cuSolver_Mem cv_cus_mem);
@@ -140,12 +141,12 @@ extern "C" {
 __global__ void cv_cuSolver_ScaleAddI_kernel(const realtype scale, realtype* csr_values,
 					     int* csr_col_index, int* csr_row_count,
 					     const int csr_base, const int nnz,
-					     const int size, const int nbatched);  
+					     const int size, const int nbatched);
 
   int cv_cuSolver_SolveSystem(CV_cuSolver_Mem cv_cus_mem, N_Vector b);
 
   int cv_cuSolver_WorkspaceFree(CV_cuSolver_Mem cv_cus_mem);
-  
+
   int cv_cuSolver_SystemFree(CV_cuSolver_Mem cv_cus_mem);
 
   void cv_cuSolver_csr_sys_free(CV_cuSolver_csr_sys csr_sys);
@@ -167,7 +168,7 @@ __global__ void cv_cuSolver_ScaleAddI_kernel(const realtype scale, realtype* csr
 #define MSGD_JACCOPY_FAILED "The stored Jacobian failed to copy in an unrecoverable manner."
 #define MSGD_JACFUNC_FAILED "The Jacobian routine failed in an unrecoverable manner."
 #define MSGD_MATSCALEADDI_FAILED "The ScaleAddI routine failed in an unrecoverable manner."
-  
+
 #ifdef __cplusplus
 }
 #endif
