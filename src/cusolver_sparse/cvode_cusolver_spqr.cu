@@ -24,6 +24,9 @@
 #define ONE          RCONST(1.0)
 #define TWO          RCONST(2.0)
 
+#define CRDOWN       RCONST(0.3)
+#define RDIV         RCONST(2.0)
+
 #define PRINT_CUSOLVER_DEBUGGING 0
 
 /*=================================================================
@@ -412,15 +415,43 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
     (convfail == CV_FAIL_OTHER);
   jgood = (!jbad) && cv_cus_mem->store_jacobian;
 
+  /* On a new step, reset the system convergence flags */
+  if (cvode_mem->cv_nst != cv_cus_mem->last_step) {
+    for (int i = 0; i < cvode_mem->cv_number_of_systems; i++) {
+      cvode_mem->cv_system_is_converged[i] = SUNFALSE;
+    }
+  }
+
   /* If jgood = SUNTRUE, use saved copy of J */
   if (jgood) {
     *jcurPtr = SUNFALSE;
     
     // Copy saved J into the linear system to solve
+    if (cvode_mem->cv_none_converged) {
     cuda_status = cudaMemcpy(cv_cus_mem->csr_sys->d_csr_values,
 			     cv_cus_mem->saved_jacobian->d_csr_values,
 			     sizeof(realtype) * cv_cus_mem->csr_sys->csr_number_nonzero * cv_cus_mem->csr_sys->number_subsystems,
 			     cudaMemcpyDeviceToDevice);
+    } else {
+      int idst = 0;
+      realtype* d_csr_dst = NULL;
+      realtype* d_csr_src = NULL;
+      for (int isrc = 0; isrc < cvode_mem->cv_number_of_systems; isrc++) {
+	if (!cvode_mem->cv_system_is_converged[isrc]) {
+	  cvode_mem->cv_linear_system_indices[idst] = isrc;
+	  d_csr_dst = &cv_cus_mem->csr_sys->d_csr_values[idst * cv_cus_mem->csr_sys->csr_number_nonzero];
+	  d_csr_src = &cv_cus_mem->saved_jacobian->d_csr_values[isrc * cv_cus_mem->csr_sys->csr_number_nonzero];
+	  cuda_status = cudaMemcpy(d_csr_dst,
+				   d_csr_src,
+				   sizeof(realtype) * cv_cus_mem->csr_sys->csr_number_nonzero,
+				   cudaMemcpyDeviceToDevice);	  
+	  idst++;
+	}
+      }
+      for (int i = idst; i < cvode_mem->cv_number_of_systems; i++) {
+	cvode_mem->cv_linear_system_indices[idst] = -1;
+      }
+    }
 
     if (cuda_status != cudaSuccess) {
       cvProcessError(cvode_mem, CV_CUSOLVER_JACCOPY_UNRECVR, "CV_CUSOLVER",
@@ -481,12 +512,16 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
     return(-1);
   }
 
+  /* Set last step to the current step */
+  cv_cus_mem->last_step = cvode_mem->cv_nst;
+
   /* Call cuSolver linear solver 'setup' with this system matrix, and
      return success/failure flag */
   cv_cus_mem->last_flag = cv_cuSolver_SolverInitialize(cv_cus_mem);
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_Setup" << std::endl;
 #endif
+
   return(cv_cus_mem->last_flag);
 
 }
@@ -523,10 +558,38 @@ int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
   }
   cv_cus_mem = (CV_cuSolver_Mem) cv_mem->cv_lmem;
 
-  /* call the cuSolver linear system solver, and copy x to b */
+  /* call the cuSolver linear system solver */
   retval = cv_cuSolver_SolveSystem(cv_cus_mem, b);
-  N_VScale(ONE, cv_cus_mem->x, b);
-  
+
+  /* copy x to b */
+  // N_VScale(ONE, cv_cus_mem->x, b);
+
+  int idst;
+  realtype* d_corr_dst = NULL;
+  realtype* d_corr_src = NULL;
+
+  realtype* device_b = N_VGetDeviceArrayPointer_Cuda(b);
+  realtype* device_x = N_VGetDeviceArrayPointer_Cuda(cv_cus_mem->x);
+
+  /* zero out elements of b that correspond to converged systems. */
+  cudaError_t cuda_status = cudaSuccess;
+  cuda_status = cudaMemset(device_b, 0,
+			   sizeof(realtype) * cv_mem->cv_size_of_systems * cv_mem->cv_number_of_systems);
+  assert(cuda_status == cudaSuccess);
+
+  for (int isrc = 0; isrc < cv_mem->cv_number_of_systems; isrc++) {
+    idst = cv_mem->cv_linear_system_indices[isrc];
+    if (idst >= 0) {
+      d_corr_dst = &device_b[idst * cv_mem->cv_size_of_systems];
+      d_corr_src = &device_x[isrc * cv_mem->cv_size_of_systems];
+      cuda_status = cudaMemcpy(d_corr_dst,
+			       d_corr_src,
+			       sizeof(realtype) * cv_mem->cv_size_of_systems,
+			       cudaMemcpyDeviceToDevice);
+      assert(cuda_status == cudaSuccess);
+    }
+  }
+
   /* scale the correction to account for change in gamma */
   if ((cv_mem->cv_lmm == CV_BDF) && (cv_mem->cv_gamrat != ONE))
     N_VScale(TWO/(ONE + cv_mem->cv_gamrat), b, b);
@@ -583,6 +646,12 @@ int cv_cuSolver_Free(CVodeMem cv_mem)
 
   /* free CV_cuSolver interface structure */
   free(cv_mem->cv_lmem);
+
+  /* free linear solver convergence tracking memory in CVodeMem */
+  free(cv_mem->cv_crate); cv_mem->cv_crate = NULL;
+  free(cv_mem->cv_delp); cv_mem->cv_delp = NULL;
+  free(cv_mem->cv_system_is_converged); cv_mem->cv_system_is_converged = NULL;
+  free(cv_mem->cv_linear_system_indices); cv_mem->cv_linear_system_indices = NULL;
   
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_Free" << std::endl;
@@ -859,6 +928,15 @@ int cv_cuSolver_SystemInitialize(void* cv_mem, int* csr_row_count, int* csr_col_
 
   if (cv_cus_mem->store_jacobian) cv_cuSolver_csr_sys_initialize(cv_cus_mem->saved_jacobian, csr_row_count, csr_col_index);
 
+  /* create data space for nonlinear solver system tracking memory */
+  cvode_mem->cv_size_of_systems = cv_cus_mem->csr_sys->size_per_subsystem;
+  cvode_mem->cv_number_of_systems = cv_cus_mem->csr_sys->number_subsystems;
+
+  cvode_mem->cv_crate = (realtype*) malloc(cvode_mem->cv_number_of_systems * sizeof(realtype));
+  cvode_mem->cv_delp = (realtype*) malloc(cvode_mem->cv_number_of_systems * sizeof(realtype));
+  cvode_mem->cv_system_is_converged = (booleantype*) malloc(cvode_mem->cv_number_of_systems * sizeof(booleantype));
+  cvode_mem->cv_linear_system_indices = (int*) malloc(cvode_mem->cv_number_of_systems * sizeof(int));
+
   return(0);
 }
 
@@ -1114,6 +1192,7 @@ int cv_cuSolver_WorkspaceFree(CV_cuSolver_Mem cv_cus_mem)
 {
   cv_cuSolver_SystemFree(cv_cus_mem);
   cv_cuSolver_SolverFree(cv_cus_mem);
+  
   return(0);
 }
 
@@ -1180,4 +1259,104 @@ int cv_cuSolver_SolverFree(CV_cuSolver_Mem cv_cus_mem)
   cv_cus_mem->cus_work = NULL;
 
   return(0);
+}
+
+
+/* custom convergence test */
+static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
+				   realtype tol, N_Vector ewt, void* cvode_mem)
+{
+  CVodeMem cv_mem;
+  int m, retval;
+  realtype del, del_i;
+  realtype dcon, dcon_i;
+  N_Vector delta_i = NULL;
+  N_Vector ewt_i = NULL;
+  booleantype return_recoverable_error = SUNFALSE;
+  // static realtype delp;
+
+  if (cvode_mem == NULL) {
+    cvProcessError(NULL, CV_MEM_NULL, "CVODE", "cv_cuSolver_NlsConvTest", MSGCV_NO_MEM);
+    return(CV_MEM_NULL);
+  }
+  cv_mem = (CVodeMem) cvode_mem;
+
+  /* get the current nonlinear solver iteration count */
+  retval = SUNNonlinSolGetCurIter(NLS, &m);
+  if (retval != CV_SUCCESS) return(CV_MEM_NULL);
+
+  dcon = ZERO;
+  del = ZERO;
+
+  // create temporary vectors
+  delta_i = N_VNew_Cuda(cv_mem->cv_size_of_systems);
+  ewt_i = N_VNew_Cuda(cv_mem->cv_size_of_systems);
+
+  N_VCopyFromDevice_Cuda(delta);
+  realtype* delta_host_ptr = N_VGetHostArrayPointer_Cuda(delta);
+  realtype* delta_i_host_ptr = N_VGetHostArrayPointer_Cuda(delta_i);  
+
+  N_VCopyFromDevice_Cuda(ewt);
+  realtype* ewt_host_ptr = N_VGetHostArrayPointer_Cuda(ewt);
+  realtype* ewt_i_host_ptr = N_VGetHostArrayPointer_Cuda(ewt_i);
+
+  // loop over systems to compute del_i and dcon_i
+  //  del = N_VWrmsNorm(delta, ewt);
+  for (int i = 0; i < cv_mem->cv_number_of_systems; i++) {
+    if (!cv_mem->cv_system_is_converged[i]) {
+      /* compute the norm of the correction */
+      for (int j = 0; j < cv_mem->cv_size_of_systems; j++) {
+	delta_i_host_ptr[j] = delta_host_ptr[i * cv_mem->cv_size_of_systems + j];
+	ewt_i_host_ptr[j] = ewt_host_ptr[i * cv_mem->cv_size_of_systems + j];
+      }
+      N_VCopyToDevice_Cuda(delta_i);
+      N_VCopyToDevice_Cuda(ewt_i);
+      del_i = N_VWrmsNorm(delta_i, ewt_i);
+
+      /* Test for convergence. If m > 0, an estimate of the convergence
+	 rate constant is stored in crate, and used in the test.        */
+      if (m > 0) {
+	cv_mem->cv_crate[i] = SUNMAX(CRDOWN * cv_mem->cv_crate[i], del_i/cv_mem->cv_delp[i]);
+      }
+      dcon_i = del_i * SUNMIN(ONE, cv_mem->cv_crate[i]) / tol;
+
+      // use dcon_i to determine if system i converged and mark it converged
+      if (dcon_i <= ONE) {
+	cv_mem->cv_system_is_converged[i] = SUNTRUE;
+	cv_mem->cv_delp[i] = ZERO;
+      } else {
+	// combine all dcon_i geometrically to dcon
+	// combine all del_i geometrically to del    
+	dcon += SUNRpowerI(dcon_i, 2);
+	del += SUNRpowerI(del_i, 2);
+	cv_mem->cv_delp[i] = del_i;
+      }
+
+      /* check if the iteration seems to be diverging */
+      if ((m >= 1) && (del_i > RDIV*cv_mem->cv_delp[i])) {
+	return_recoverable_error = SUNTRUE;
+	break;
+      }
+    }
+  }
+
+  N_VDestroy(delta_i);
+  N_VDestroy(ewt_i);
+
+  if (return_recoverable_error)
+    return(SUN_NLS_CONV_RECVR);
+
+  dcon = SUNRsqrt(dcon);
+  del = SUNRsqrt(del);
+
+  if (dcon <= ONE) {
+    cv_mem->cv_acnrm = (m==0) ? del : N_VWrmsNorm(ycor, cv_mem->cv_ewt);
+    return(CV_SUCCESS); /* Nonlinear system was solved successfully */
+  }
+
+  /* Save norm of correction and loop again */
+  // delp = del;
+
+  /* Not yet converged */
+  return(SUN_NLS_CONTINUE);
 }

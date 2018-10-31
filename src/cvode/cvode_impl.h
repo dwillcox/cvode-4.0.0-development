@@ -150,9 +150,18 @@ typedef struct CVodeMemRec {
   realtype cv_gammap;           /* gamma at the last setup call               */
   realtype cv_gamrat;           /* gamma / gammap                             */
 
-  realtype cv_crate;            /* estimated corrector convergence rate       */
-  realtype cv_acnrm;            /* | acor | wrms                              */
-  realtype cv_nlscoef;          /* coeficient in nonlinear convergence test   */
+  int cv_number_of_systems;     /* number of systems of equations             */
+  int cv_size_of_systems;       /* size of systems of equations               */
+
+  // Quantities of size cv_number_of_systems
+  realtype* cv_crate;           /* estimated corrector convergence rate       */
+  realtype* cv_delp;            /* previous value of del for corrector        */
+  booleantype* cv_system_is_converged;  /* bool flag set if system converged  */
+  int* cv_linear_system_indices;        /* corrector linear system indices    */
+
+  booleantype cv_none_converged; /* true if no system is converged in corrector */
+  realtype cv_acnrm;             /* | acor | wrms                               */
+  realtype cv_nlscoef;           /* coeficient in nonlinear convergence test    */
 
   /*------
     Limits 

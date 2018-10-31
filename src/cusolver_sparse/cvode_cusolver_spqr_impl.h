@@ -84,6 +84,8 @@ extern "C" {
 
     int nstlj;                         /* step where we last calculated Jacobian */
 
+    int last_step;                     /* last CVODE step index for checking if we stepped */
+
     int last_flag;                     /* last return flag */
 
     booleantype store_jacobian;        /* Should we store a Jacobian? */
@@ -156,6 +158,9 @@ __global__ void cv_cuSolver_ScaleAddI_kernel(const realtype scale, realtype* csr
   void cv_cuSolver_check_cusolver_status(cusolverStatus_t status);
 
   void cv_cuSolver_check_cusparse_status(cusparseStatus_t status);
+
+  static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
+				     realtype tol, N_Vector ewt, void* cvode_mem);  
 
 /*-----------------------------------------------------------------
   Error Messages

@@ -2518,7 +2518,8 @@ static int cvNls(CVodeMem cv_mem, int nflag)
       (cv_mem->cv_nst >= cv_mem->cv_nstlp + MSBP) ||
       (SUNRabs(cv_mem->cv_gamrat-ONE) > DGMAX);
   } else {
-    cv_mem->cv_crate = ONE;
+    for (int i = 0; i < cv_mem->cv_number_of_systems; i++)
+      cv_mem->cv_crate[i] = ONE;
     callSetup = SUNFALSE;
   }
 

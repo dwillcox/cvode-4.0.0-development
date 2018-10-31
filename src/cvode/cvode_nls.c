@@ -18,7 +18,8 @@
 #include "sundials/sundials_math.h"
 
 /* constant macros */
-#define ONE RCONST(1.0) /* real 1.0 */
+#define ZERO RCONST(0.0)
+#define ONE  RCONST(1.0) /* real 1.0 */
 
 /* nonlinear solver constants
      NLS_MAXCOR  maximum no. of corrector iterations for the nonlinear solver
@@ -159,6 +160,11 @@ int cvNlsInit(CVodeMem cvode_mem)
     return(CV_NLS_INIT_FAIL);
   }
 
+  /* initialize convergence status for systems */
+  for (int i = 0; i < cvode_mem->cv_number_of_systems; i++) {
+    cvode_mem->cv_system_is_converged[i] = SUNFALSE;
+  }
+
   return(CV_SUCCESS);
 }
 
@@ -188,7 +194,9 @@ static int cvNlsLSetup(N_Vector ycor, N_Vector res, booleantype jbad,
   /* update Jacobian status */
   *jcur = cv_mem->cv_jcur;
 
-  cv_mem->cv_gamrat = cv_mem->cv_crate = ONE;
+  cv_mem->cv_gamrat = ONE;
+  for (int i = 0; i < cv_mem->cv_number_of_systems; i++)
+    cv_mem->cv_crate[i] = ONE;
   cv_mem->cv_gammap = cv_mem->cv_gamma;
   cv_mem->cv_nstlp  = cv_mem->cv_nst;
 
@@ -244,9 +252,9 @@ static int cvNlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
   /* Test for convergence. If m > 0, an estimate of the convergence
      rate constant is stored in crate, and used in the test.        */
   if (m > 0) {
-    cv_mem->cv_crate = SUNMAX(CRDOWN * cv_mem->cv_crate, del/delp);
+    cv_mem->cv_crate[0] = SUNMAX(CRDOWN * cv_mem->cv_crate[0], del/delp);
   }
-  dcon = del * SUNMIN(ONE, cv_mem->cv_crate) / tol;
+  dcon = del * SUNMIN(ONE, cv_mem->cv_crate[0]) / tol;
 
   if (dcon <= ONE) {
     cv_mem->cv_acnrm = (m==0) ? del : N_VWrmsNorm(ycor, cv_mem->cv_ewt);
