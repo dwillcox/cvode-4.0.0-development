@@ -80,7 +80,7 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   cv_mem->cv_lsetup = cv_cuSolver_Setup;
   cv_mem->cv_lsolve = cv_cuSolver_Solve;
   cv_mem->cv_lfree  = cv_cuSolver_Free;
-  
+
   /* Get memory for CV_cuSolver_MemRec */
   cv_cus_mem = NULL;
   cv_cus_mem = (CV_cuSolver_Mem) malloc(sizeof(struct CV_cuSolver_MemRec));
@@ -92,7 +92,7 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
 
   /* store the type of cuSolver to use */
   cv_cus_mem->method = cus_method;
-  
+
   /* Initialize Jacobian-related data */
   cv_cus_mem->jac = NULL; // put the function here
   cv_cus_mem->J_data = cv_mem;
@@ -100,7 +100,7 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   /* Allocate memory for x and other stuff */
   cv_cus_mem->x = N_VClone(cv_mem->cv_tempv);
   if (cv_cus_mem->x == NULL) {
-    cvProcessError(cv_mem, CV_CUSOLVER_MEM_FAIL, "CV_CUSOLVER", 
+    cvProcessError(cv_mem, CV_CUSOLVER_MEM_FAIL, "CV_CUSOLVER",
                     "CV_cuSolver_SetLinearSolver", MSGD_MEM_FAIL);
     free(cv_cus_mem); cv_cus_mem = NULL;
     return(CV_CUSOLVER_MEM_FAIL);
@@ -119,7 +119,7 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   } else {
     cv_cus_mem->saved_jacobian = NULL;
   }
-  
+
   /* Set pointers in cv_cuSolver memory structure to NULL */
   cv_cus_mem->cus_work->workspace = NULL;
 
@@ -140,16 +140,22 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   std::cout << "Created CV_cuSolver_Mem object." << std::endl;
 #endif
 
+  /* Set the convergence test function to use with this solver */
+  int flag = CV_CUSOLVER_SUCCESS;
+  flag = CVodeSetNonlinConvTestFn(cvode_mem, cv_cuSolver_NlsConvTest);
+
+  assert(flag == CV_SUCCESS);
+
   return(CV_CUSOLVER_SUCCESS);
 }
 
 
-/* 
+/*
  * =================================================================
  * EXPORTED FUNCTIONS -- OPTIONAL
  * =================================================================
  */
-              
+
 /* CV_cuSolver_SetJacFun specifies the Jacobian function. */
 int cv_cuSolver_SetJacFun(void *cvode_mem, CV_cuSolver_JacFn jac)
 {
@@ -171,7 +177,7 @@ int cv_cuSolver_SetJacFun(void *cvode_mem, CV_cuSolver_JacFn jac)
   cv_cus_mem = (CV_cuSolver_Mem) cv_mem->cv_lmem;
 
   cv_cus_mem->jac = jac;
-  
+
   return(CV_CUSOLVER_SUCCESS);
 }
 
@@ -247,7 +253,7 @@ char *cv_cuSolver_GetReturnFlagName(long int flag)
   switch(flag) {
   case CV_CUSOLVER_SUCCESS:
     sprintf(name,"CV_CUSOLVER_SUCCESS");
-    break;   
+    break;
   case CV_CUSOLVER_MEM_NULL:
     sprintf(name,"CV_CUSOLVER_MEM_NULL");
     break;
@@ -290,7 +296,7 @@ char *cv_cuSolver_GetReturnFlagName(long int flag)
   -----------------------------------------------------------------*/
 int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 {
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing cv_cuSolver_Initialize" << std::endl;
 #endif
@@ -302,12 +308,12 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 
   /* Return immediately if cvode_mem or cvode_mem->cv_lmem are NULL */
   if (cvode_mem == NULL) {
-    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER",
                     "cv_cuSolver_Initialize", MSGD_CVMEM_NULL);
     return(CV_CUSOLVER_MEM_NULL);
   }
   if (cvode_mem->cv_lmem == NULL) {
-    cvProcessError(cvode_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(cvode_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER",
                     "cv_cuSolver_Initialize", MSGD_LMEM_NULL);
     return(CV_CUSOLVER_LMEM_NULL);
   }
@@ -321,15 +327,15 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 
   // Make handle for cuSolver if it doesn't already exist
 #if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating cuSolver Handle" << std::endl;  
+  std::cout << "Creating cuSolver Handle" << std::endl;
 #endif
   cusolver_status = cusolverSpCreate(&cv_cus_mem->cus_work->cusolverHandle);
-  cv_cuSolver_check_cusolver_status(cusolver_status);  
+  cv_cuSolver_check_cusolver_status(cusolver_status);
   assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
   // Setup Sparse system description
 #if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating Matrix Descriptor" << std::endl;  
+  std::cout << "Creating Matrix Descriptor" << std::endl;
 #endif
   cusparse_status = cusparseCreateMatDescr(&cv_cus_mem->cus_work->system_description);
   cv_cuSolver_check_cusparse_status(cusparse_status);
@@ -342,7 +348,7 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
   cv_cuSolver_check_cusparse_status(cusparse_status);
   assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
 
-#if PRINT_CUSOLVER_DEBUGGING  
+#if PRINT_CUSOLVER_DEBUGGING
   std::cout << "In Matrix Descriptor, setting Matrix Index Base" << std::endl;
 #endif
   cusparse_status = cusparseSetMatIndexBase(cv_cus_mem->cus_work->system_description, CUSPARSE_INDEX_BASE_ONE);
@@ -351,10 +357,10 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 
   // Create an info object
 #if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating info object" << std::endl;  
+  std::cout << "Creating info object" << std::endl;
 #endif
   cusolver_status = cusolverSpCreateCsrqrInfo(&cv_cus_mem->cus_work->info);
-  cv_cuSolver_check_cusolver_status(cusolver_status);  
+  cv_cuSolver_check_cusolver_status(cusolver_status);
   assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
 #if PRINT_CUSOLVER_DEBUGGING
@@ -384,7 +390,7 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
 {
 
 #if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Doing cv_cuSolver_Setup" << std::endl;  
+  std::cout << "Doing cv_cuSolver_Setup" << std::endl;
 #endif
 
   booleantype jbad, jgood;
@@ -395,12 +401,12 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
 
   /* Return immediately if cvode_mem or cvode_mem->cv_lmem are NULL */
   if (cvode_mem == NULL) {
-    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER",
                     "cv_cuSolver_Setup", MSGD_CVMEM_NULL);
     return(CV_CUSOLVER_MEM_NULL);
   }
   if (cvode_mem->cv_lmem == NULL) {
-    cvProcessError(cvode_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(cvode_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER",
                     "cv_cuSolver_Setup", MSGD_LMEM_NULL);
     return(CV_CUSOLVER_LMEM_NULL);
   }
@@ -425,7 +431,7 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
   /* If jgood = SUNTRUE, use saved copy of J */
   if (jgood) {
     *jcurPtr = SUNFALSE;
-    
+
     // Copy saved J into the linear system to solve
     if (cvode_mem->cv_none_converged) {
     cuda_status = cudaMemcpy(cv_cus_mem->csr_sys->d_csr_values,
@@ -444,13 +450,17 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
 	  cuda_status = cudaMemcpy(d_csr_dst,
 				   d_csr_src,
 				   sizeof(realtype) * cv_cus_mem->csr_sys->csr_number_nonzero,
-				   cudaMemcpyDeviceToDevice);	  
+				   cudaMemcpyDeviceToDevice);
 	  idst++;
 	}
       }
       for (int i = idst; i < cvode_mem->cv_number_of_systems; i++) {
 	cvode_mem->cv_linear_system_indices[idst] = -1;
       }
+
+      std::cout << "Set cv_linear_system_indices to:" << std::endl;
+      for (int i = 0; i < cvode_mem->cv_number_of_systems; i++)
+	std::cout << i << " " << cvode_mem->cv_linear_system_indices[idst] << std::endl;
     }
 
     if (cuda_status != cudaSuccess) {
@@ -461,16 +471,17 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
     }
     /* If jgood = SUNFALSE, call jac routine for new J value */
   } else {
-    // Calculate Jacobian matrix  
+    // Calculate Jacobian matrix
     cv_cus_mem->nje++;
-    cv_cus_mem->nstlj = cvode_mem->cv_nst;    
+    cv_cus_mem->nstlj = cvode_mem->cv_nst;
     *jcurPtr = SUNTRUE;
 
-    retval = cv_cus_mem->jac(cvode_mem->cv_tn, ypred, 
-			     fpred, cv_cus_mem->csr_sys, 
+    retval = cv_cus_mem->jac(cvode_mem->cv_tn, ypred,
+			     fpred, cv_cus_mem->csr_sys,
 			     cv_cus_mem->J_data);
+
     if (retval < 0) {
-      cvProcessError(cvode_mem, CV_CUSOLVER_JACFUNC_UNRECVR, "CV_CUSOLVER", 
+      cvProcessError(cvode_mem, CV_CUSOLVER_JACFUNC_UNRECVR, "CV_CUSOLVER",
 		     "cv_cuSolver_Setup",  MSGD_JACFUNC_FAILED);
       cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_UNRECVR;
 #if PRINT_CUSOLVER_DEBUGGING
@@ -479,6 +490,7 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
 #endif
       return(-1);
     }
+
     if (retval > 0) {
       cv_cus_mem->last_flag = CV_CUSOLVER_JACFUNC_RECVR;
 #if PRINT_CUSOLVER_DEBUGGING
@@ -486,6 +498,11 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
       std::cout << "Finished cv_cuSolver_Setup" << std::endl;
 #endif
       return(1);
+    }
+
+    /* set linear system indices assuming no system is converged */
+    for (int i = 0; i < cvode_mem->cv_number_of_systems; i++) {
+      cvode_mem->cv_linear_system_indices[i] = i;
     }
 
     if (cv_cus_mem->store_jacobian) {
@@ -498,11 +515,11 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
     }
 
   }
-  
+
   /* Scale and add I to get A = I - gamma*J */
   retval = cv_cuSolver_ScaleAddI(-cvode_mem->cv_gamma, cv_cus_mem);
   if (retval) {
-    cvProcessError(cvode_mem, CV_CUSOLVER_SCALEADDI_FAIL, "CV_CUSOLVER", 
+    cvProcessError(cvode_mem, CV_CUSOLVER_SCALEADDI_FAIL, "CV_CUSOLVER",
                    "cv_cuSolver_Setup",  MSGD_MATSCALEADDI_FAILED);
     cv_cus_mem->last_flag = CV_CUSOLVER_SCALEADDI_FAIL;
 #if PRINT_CUSOLVER_DEBUGGING
@@ -530,14 +547,14 @@ int cv_cuSolver_Setup(CVodeMem cvode_mem, int convfail, N_Vector ypred,
 /*-----------------------------------------------------------------
   cv_cuSolver_Solve
   -----------------------------------------------------------------
-  This routine interfaces between CVode and the generic 
-  cuSolver solver, by calling the solver and scaling 
+  This routine interfaces between CVode and the generic
+  cuSolver solver, by calling the solver and scaling
   the solution appropriately when gamrat != 1.
   -----------------------------------------------------------------*/
 int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
                N_Vector ycur, N_Vector fcur)
 {
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing cv_cuSolver_Solve" << std::endl;
 #endif
@@ -547,12 +564,12 @@ int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
 
   /* Return immediately if cv_mem or cv_mem->cv_lmem are NULL */
   if (cv_mem == NULL) {
-    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER",
 		    "cv_cuSolver_Solve", MSGD_CVMEM_NULL);
     return(CV_CUSOLVER_MEM_NULL);
   }
   if (cv_mem->cv_lmem == NULL) {
-    cvProcessError(cv_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER", 
+    cvProcessError(cv_mem, CV_CUSOLVER_LMEM_NULL, "CV_CUSOLVER",
 		    "cv_cuSolver_Solve", MSGD_LMEM_NULL);
     return(CV_CUSOLVER_LMEM_NULL);
   }
@@ -573,12 +590,17 @@ int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
 
   /* zero out elements of b that correspond to converged systems. */
   cudaError_t cuda_status = cudaSuccess;
+  cuda_status = cudaGetLastError();
+  assert(cuda_status == cudaSuccess);
+
   cuda_status = cudaMemset(device_b, 0,
 			   sizeof(realtype) * cv_mem->cv_size_of_systems * cv_mem->cv_number_of_systems);
   assert(cuda_status == cudaSuccess);
 
   for (int isrc = 0; isrc < cv_mem->cv_number_of_systems; isrc++) {
     idst = cv_mem->cv_linear_system_indices[isrc];
+    //    std::cout << "isrc = " << isrc << std::endl;
+    //    std::cout << "idst = " << isrc << std::endl;
     if (idst >= 0) {
       d_corr_dst = &device_b[idst * cv_mem->cv_size_of_systems];
       d_corr_src = &device_x[isrc * cv_mem->cv_size_of_systems];
@@ -586,21 +608,26 @@ int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
 			       d_corr_src,
 			       sizeof(realtype) * cv_mem->cv_size_of_systems,
 			       cudaMemcpyDeviceToDevice);
-      assert(cuda_status == cudaSuccess);
+      if (cuda_status != cudaSuccess) {
+	std::cout << "Error moving from isrc = " << isrc << " to idst = " << idst << std::endl;
+	std::cout << cudaGetErrorString(cuda_status) << std::endl;
+	std::cout << "Exiting ..." << std::endl;
+	assert(cuda_status == cudaSuccess);
+      }
     }
   }
 
   /* scale the correction to account for change in gamma */
   if ((cv_mem->cv_lmm == CV_BDF) && (cv_mem->cv_gamrat != ONE))
     N_VScale(TWO/(ONE + cv_mem->cv_gamrat), b, b);
-  
+
   /* store solver return value and return */
   cv_cus_mem->last_flag = retval;
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_Solve" << std::endl;
 #endif
-  
+
   return(retval);
 }
 
@@ -608,18 +635,18 @@ int cv_cuSolver_Solve(CVodeMem cv_mem, N_Vector b, N_Vector weight,
 /*-----------------------------------------------------------------
   cv_cuSolver_Free
   -----------------------------------------------------------------
-  This routine frees memory associates with the CV_cuSolver solver 
+  This routine frees memory associates with the CV_cuSolver solver
   interface.
   -----------------------------------------------------------------*/
 int cv_cuSolver_Free(CVodeMem cv_mem)
 {
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing cv_cuSolver_Free" << std::endl;
 #endif
 
   CV_cuSolver_Mem cv_cus_mem;
-  cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;  
+  cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
 
   /* Return immediately if cv_mem or cv_mem->cv_lmem are NULL */
   if (cv_mem == NULL)  return (CV_CUSOLVER_SUCCESS);
@@ -634,11 +661,11 @@ int cv_cuSolver_Free(CVodeMem cv_mem)
 
   /* Destroy cuSolver memory */
   cusolver_status = cusolverSpDestroy(cv_cus_mem->cus_work->cusolverHandle);
-  cv_cuSolver_check_cusolver_status(cusolver_status);  
+  cv_cuSolver_check_cusolver_status(cusolver_status);
   assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
   cusolver_status = cusolverSpDestroyCsrqrInfo(cv_cus_mem->cus_work->info);
-  cv_cuSolver_check_cusolver_status(cusolver_status);  
+  cv_cuSolver_check_cusolver_status(cusolver_status);
   assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
   /* Cleanup system workspace */
@@ -652,11 +679,11 @@ int cv_cuSolver_Free(CVodeMem cv_mem)
   free(cv_mem->cv_delp); cv_mem->cv_delp = NULL;
   free(cv_mem->cv_system_is_converged); cv_mem->cv_system_is_converged = NULL;
   free(cv_mem->cv_linear_system_indices); cv_mem->cv_linear_system_indices = NULL;
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_Free" << std::endl;
 #endif
-  
+
   return(CV_CUSOLVER_SUCCESS);
 }
 
@@ -698,11 +725,11 @@ int cv_cuSolver_GetNumJacEvals(void* cv_mem, int* nje)
   -----------------------------------------------------------------*/
 int cv_cuSolver_ScaleAddI(realtype scale, CV_cuSolver_Mem cv_cus_mem)
 {
-  
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing ScaleAddI" << std::endl;
 #endif
-  
+
   cudaError_t cuda_status = cudaSuccess;
   cuda_status = cudaGetLastError();
   assert(cuda_status == cudaSuccess);
@@ -711,7 +738,7 @@ int cv_cuSolver_ScaleAddI(realtype scale, CV_cuSolver_Mem cv_cus_mem)
   std::cout << "Got CUDA Last Error of: ";
   std::cout << cudaGetErrorString(cuda_status) << std::endl;
 #endif
-  
+
   CV_cuSolver_csr_sys csr_sys = cv_cus_mem->csr_sys;
   const int system_size = csr_sys->number_subsystems;
   const int numThreads = (system_size < 32) ? system_size : 32;
@@ -741,7 +768,7 @@ int cv_cuSolver_ScaleAddI(realtype scale, CV_cuSolver_Mem cv_cus_mem)
 
   std::cout << "scale factor is: " << scale << std::endl;
 #endif
-  
+
   cv_cuSolver_ScaleAddI_kernel<<<numBlocks, numThreads>>>(scale,
 							  csr_sys->d_csr_values,
 							  csr_sys->d_csr_col_index,
@@ -751,10 +778,10 @@ int cv_cuSolver_ScaleAddI(realtype scale, CV_cuSolver_Mem cv_cus_mem)
 							  csr_sys->size_per_subsystem,
 							  csr_sys->number_subsystems);
   cuda_status = cudaDeviceSynchronize();
-#if PRINT_CUSOLVER_DEBUGGING  
+#if PRINT_CUSOLVER_DEBUGGING
   std::cout << cudaGetErrorString(cuda_status) << std::endl;
 #endif
-  assert(cuda_status == cudaSuccess);  
+  assert(cuda_status == cudaSuccess);
 
 #if PRINT_CUSOLVER_DEBUGGING
   // print out the first two systems after ScaleAddI
@@ -852,11 +879,11 @@ __global__ void cv_cuSolver_ScaleAddI_kernel(const realtype scale, realtype* csr
 int cv_cuSolver_CSR_SetSizes(void* cv_mem, int size_per_subsystem,
 			     int csr_number_nonzero, int number_subsystems)
 {
-  
-#if PRINT_CUSOLVER_DEBUGGING  
+
+#if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing CSR_SetSizes" << std::endl;
 #endif
-  
+
   CVodeMem cvode_mem = (CVodeMem) cv_mem;
   CV_cuSolver_Mem cv_cus_mem = (CV_cuSolver_Mem) cvode_mem->cv_lmem;
 
@@ -872,19 +899,19 @@ int cv_cuSolver_CSR_SetSizes(void* cv_mem, int size_per_subsystem,
   }
 
   if (retval1 != CV_CUSOLVER_SUCCESS || retval2 != CV_CUSOLVER_SUCCESS) {
-    cvProcessError(cvode_mem, CV_CUSOLVER_MEM_FAIL, "CV_CUSOLVER", 
+    cvProcessError(cvode_mem, CV_CUSOLVER_MEM_FAIL, "CV_CUSOLVER",
                    "CV_cuSolver_CSR_SetSizes", MSGD_MEM_FAIL);
     cv_cuSolver_WorkspaceFree(cv_cus_mem);
     free(cv_cus_mem); cv_cus_mem = NULL;
     return(CV_CUSOLVER_MEM_FAIL);
   }
 
-#if PRINT_CUSOLVER_DEBUGGING  
+#if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished CSR_SetSizes" << std::endl;
 #endif
-  
+
   return(0);
-  
+
 }
 
 
@@ -893,11 +920,11 @@ int cv_cuSolver_CSR_SetSizes_Matrix(CV_cuSolver_csr_sys csr_sys, int size_per_su
 {
   // Return with an error if memory is already allocated.
   // That is, you cannot change these values after setting them
-  // to avoid memory leaks.  
+  // to avoid memory leaks.
   if (csr_sys->d_csr_values == NULL &&
       csr_sys->d_csr_col_index == NULL &&
       csr_sys->d_csr_row_count == NULL) {
-  
+
     csr_sys->size_per_subsystem = size_per_subsystem;
     csr_sys->csr_number_nonzero = csr_number_nonzero;
     csr_sys->number_subsystems  = number_subsystems;
@@ -949,7 +976,7 @@ void cv_cuSolver_csr_sys_initialize(CV_cuSolver_csr_sys csr_sys, int* csr_row_co
     cuda_status = cudaMalloc((void**) &csr_sys->d_csr_values,
 			     sizeof(realtype) * csr_sys->csr_number_nonzero * csr_sys->number_subsystems);
     assert(cuda_status == cudaSuccess);
-#if PRINT_CUSOLVER_DEBUGGING    
+#if PRINT_CUSOLVER_DEBUGGING
     std::cout << "Allocated device memory for d_csr_values" << std::endl;
 #endif
   }
@@ -1041,7 +1068,7 @@ int cv_cuSolver_SolverInitialize(CV_cuSolver_Mem cv_cus_mem)
   cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
 
   // Analyze system structure
-#if PRINT_CUSOLVER_DEBUGGING  
+#if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Calling analysis routine with ..." << std::endl;
   std::cout << "   cusolverHandle = " << cv_cus_mem->cus_work->cusolverHandle << std::endl;
   std::cout << "   size = " << cv_cus_mem->csr_sys->size_per_subsystem << std::endl;
@@ -1074,7 +1101,7 @@ int cv_cuSolver_SolverInitialize(CV_cuSolver_Mem cv_cus_mem)
 							cv_cus_mem->cus_work->info,
 							&cv_cus_mem->cus_work->internal_size,
 							&cv_cus_mem->cus_work->workspace_size);
-    cv_cuSolver_check_cusolver_status(cusolver_status);  
+    cv_cuSolver_check_cusolver_status(cusolver_status);
     assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
     // Allocate working space on the device
@@ -1097,7 +1124,7 @@ int cv_cuSolver_SolveSystem(CV_cuSolver_Mem cv_cus_mem, N_Vector b)
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Doing cv_cuSolver_SolveSystem" << std::endl;
 #endif
-  
+
   cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
   cudaError_t cuda_status = cudaSuccess;
   cuda_status = cudaGetLastError();
@@ -1158,7 +1185,7 @@ int cv_cuSolver_SolveSystem(CV_cuSolver_Mem cv_cus_mem, N_Vector b)
     std::cout << sysmat2_b[i] << " ";
   std::cout << std::endl;
 #endif
-  
+
 
   cusolver_status = cusolverSpDcsrqrsvBatched(cv_cus_mem->cus_work->cusolverHandle,
 					      cv_cus_mem->csr_sys->size_per_subsystem,
@@ -1173,7 +1200,7 @@ int cv_cuSolver_SolveSystem(CV_cuSolver_Mem cv_cus_mem, N_Vector b)
 					      cv_cus_mem->csr_sys->number_subsystems,
 					      cv_cus_mem->cus_work->info,
 					      cv_cus_mem->cus_work->workspace);
-  cv_cuSolver_check_cusolver_status(cusolver_status);  
+  cv_cuSolver_check_cusolver_status(cusolver_status);
   assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_SolveSystem" << std::endl;
@@ -1192,7 +1219,7 @@ int cv_cuSolver_WorkspaceFree(CV_cuSolver_Mem cv_cus_mem)
 {
   cv_cuSolver_SystemFree(cv_cus_mem);
   cv_cuSolver_SolverFree(cv_cus_mem);
-  
+
   return(0);
 }
 
@@ -1221,11 +1248,11 @@ int cv_cuSolver_SystemFree(CV_cuSolver_Mem cv_cus_mem)
 
 void cv_cuSolver_csr_sys_free(CV_cuSolver_csr_sys csr_sys)
 {
-  cudaError_t cuda_status = cudaSuccess;  
+  cudaError_t cuda_status = cudaSuccess;
   if (csr_sys->d_csr_row_count != NULL) {
     cuda_status = cudaFree(csr_sys->d_csr_row_count);
     assert(cuda_status == cudaSuccess);
-    csr_sys->d_csr_row_count = NULL;    
+    csr_sys->d_csr_row_count = NULL;
   }
 
   if (csr_sys->d_csr_col_index != NULL) {
@@ -1237,7 +1264,7 @@ void cv_cuSolver_csr_sys_free(CV_cuSolver_csr_sys csr_sys)
   if (csr_sys->d_csr_values != NULL) {
     cuda_status = cudaFree(csr_sys->d_csr_values);
     assert(cuda_status == cudaSuccess);
-    csr_sys->d_csr_values = NULL;    
+    csr_sys->d_csr_values = NULL;
   }
 }
 
@@ -1252,7 +1279,7 @@ int cv_cuSolver_SolverFree(CV_cuSolver_Mem cv_cus_mem)
 
   if (cv_cus_mem->cus_work->workspace != NULL) {
     cudaFree(cv_cus_mem->cus_work->workspace);
-    cv_cus_mem->cus_work->workspace = NULL;    
+    cv_cus_mem->cus_work->workspace = NULL;
   }
 
   free(cv_cus_mem->cus_work);
@@ -1263,8 +1290,8 @@ int cv_cuSolver_SolverFree(CV_cuSolver_Mem cv_cus_mem)
 
 
 /* custom convergence test */
-static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
-				   realtype tol, N_Vector ewt, void* cvode_mem)
+int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
+			    realtype tol, N_Vector ewt, void* cvode_mem)
 {
   CVodeMem cv_mem;
   int m, retval;
@@ -1294,7 +1321,7 @@ static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vect
 
   N_VCopyFromDevice_Cuda(delta);
   realtype* delta_host_ptr = N_VGetHostArrayPointer_Cuda(delta);
-  realtype* delta_i_host_ptr = N_VGetHostArrayPointer_Cuda(delta_i);  
+  realtype* delta_i_host_ptr = N_VGetHostArrayPointer_Cuda(delta_i);
 
   N_VCopyFromDevice_Cuda(ewt);
   realtype* ewt_host_ptr = N_VGetHostArrayPointer_Cuda(ewt);
@@ -1326,7 +1353,7 @@ static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vect
 	cv_mem->cv_delp[i] = ZERO;
       } else {
 	// combine all dcon_i geometrically to dcon
-	// combine all del_i geometrically to del    
+	// combine all del_i geometrically to del
 	dcon += SUNRpowerI(dcon_i, 2);
 	del += SUNRpowerI(del_i, 2);
 	cv_mem->cv_delp[i] = del_i;

@@ -364,6 +364,8 @@ SUNDIALS_EXPORT int CVodeSetMaxNonlinIters(void *cvode_mem, int maxcor);
 SUNDIALS_EXPORT int CVodeSetMaxConvFails(void *cvode_mem, int maxncf);
 SUNDIALS_EXPORT int CVodeSetNonlinConvCoef(void *cvode_mem, realtype nlscoef);
 
+SUNDIALS_EXPORT int CVodeSetNonlinConvTestFn(void *cvode_mem, SUNNonlinSolConvTestFn ConvTestFn);
+
 SUNDIALS_EXPORT int CVodeSetRootDirection(void *cvode_mem, int *rootdir);
 SUNDIALS_EXPORT int CVodeSetNoInactiveRootWarn(void *cvode_mem);
 

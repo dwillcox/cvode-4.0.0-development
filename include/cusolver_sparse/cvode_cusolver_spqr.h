@@ -159,8 +159,8 @@ __global__ void cv_cuSolver_ScaleAddI_kernel(const realtype scale, realtype* csr
 
   void cv_cuSolver_check_cusparse_status(cusparseStatus_t status);
 
-  static int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
-				     realtype tol, N_Vector ewt, void* cvode_mem);  
+  int cv_cuSolver_NlsConvTest(SUNNonlinearSolver NLS, N_Vector ycor, N_Vector delta,
+			      realtype tol, N_Vector ewt, void* cvode_mem);
 
 /*-----------------------------------------------------------------
   Error Messages
