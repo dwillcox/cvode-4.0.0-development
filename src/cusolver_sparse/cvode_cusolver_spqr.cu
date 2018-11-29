@@ -136,6 +136,51 @@ int cv_cuSolver_SetLinearSolver(void *cvode_mem, cuSolver_method cus_method,
   /* Attach linear solver memory to integrator memory */
   cv_mem->cv_lmem = cv_cus_mem;
 
+  /* Initialize CUDA CUSOLVER Data Structures */
+  cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
+  cusparseStatus_t cusparse_status = CUSPARSE_STATUS_SUCCESS;
+
+  // Make handle for cuSolver
+#if PRINT_CUSOLVER_DEBUGGING
+  std::cout << "Creating cuSolver Handle" << std::endl;
+#endif
+
+  cusolver_status = cusolverSpCreate(&cv_cus_mem->cus_work->cusolverHandle);
+  cv_cuSolver_check_cusolver_status(cusolver_status);
+  assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
+
+  // Create an info object
+#if PRINT_CUSOLVER_DEBUGGING
+  std::cout << "Creating info object" << std::endl;
+#endif
+
+  cusolver_status = cusolverSpCreateCsrqrInfo(&cv_cus_mem->cus_work->info);
+  cv_cuSolver_check_cusolver_status(cusolver_status);
+  assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
+
+  // Setup Sparse system description
+#if PRINT_CUSOLVER_DEBUGGING
+  std::cout << "Creating Matrix Descriptor" << std::endl;
+#endif
+
+  cusparse_status = cusparseCreateMatDescr(&cv_cus_mem->cus_work->system_description);
+  cv_cuSolver_check_cusparse_status(cusparse_status);
+  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
+
+#if PRINT_CUSOLVER_DEBUGGING
+  std::cout << "In Matrix Descriptor, setting Matrix Type" << std::endl;
+#endif
+  cusparse_status = cusparseSetMatType(cv_cus_mem->cus_work->system_description, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cv_cuSolver_check_cusparse_status(cusparse_status);
+  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
+
+#if PRINT_CUSOLVER_DEBUGGING
+  std::cout << "In Matrix Descriptor, setting Matrix Index Base" << std::endl;
+#endif
+  cusparse_status = cusparseSetMatIndexBase(cv_cus_mem->cus_work->system_description, CUSPARSE_INDEX_BASE_ONE);
+  cv_cuSolver_check_cusparse_status(cusparse_status);
+  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
+
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Created CV_cuSolver_Mem object." << std::endl;
 #endif
@@ -303,9 +348,6 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
 
   CV_cuSolver_Mem cv_cus_mem;
 
-  cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
-  cusparseStatus_t cusparse_status = CUSPARSE_STATUS_SUCCESS;
-
   /* Return immediately if cvode_mem or cvode_mem->cv_lmem are NULL */
   if (cvode_mem == NULL) {
     cvProcessError(NULL, CV_CUSOLVER_MEM_NULL, "CV_CUSOLVER",
@@ -323,45 +365,6 @@ int cv_cuSolver_Initialize(CVodeMem cvode_mem)
   cv_cus_mem->J_data = cvode_mem->cv_user_data;
   cv_cus_mem->nstlj  = 0;
   cv_cuSolver_InitializeCounters(cv_cus_mem);
-
-
-  // Make handle for cuSolver if it doesn't already exist
-#if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating cuSolver Handle" << std::endl;
-#endif
-  cusolver_status = cusolverSpCreate(&cv_cus_mem->cus_work->cusolverHandle);
-  cv_cuSolver_check_cusolver_status(cusolver_status);
-  assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
-
-  // Setup Sparse system description
-#if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating Matrix Descriptor" << std::endl;
-#endif
-  cusparse_status = cusparseCreateMatDescr(&cv_cus_mem->cus_work->system_description);
-  cv_cuSolver_check_cusparse_status(cusparse_status);
-  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
-
-#if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "In Matrix Descriptor, setting Matrix Type" << std::endl;
-#endif
-  cusparse_status = cusparseSetMatType(cv_cus_mem->cus_work->system_description, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cv_cuSolver_check_cusparse_status(cusparse_status);
-  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
-
-#if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "In Matrix Descriptor, setting Matrix Index Base" << std::endl;
-#endif
-  cusparse_status = cusparseSetMatIndexBase(cv_cus_mem->cus_work->system_description, CUSPARSE_INDEX_BASE_ONE);
-  cv_cuSolver_check_cusparse_status(cusparse_status);
-  assert(cusparse_status == CUSPARSE_STATUS_SUCCESS);
-
-  // Create an info object
-#if PRINT_CUSOLVER_DEBUGGING
-  std::cout << "Creating info object" << std::endl;
-#endif
-  cusolver_status = cusolverSpCreateCsrqrInfo(&cv_cus_mem->cus_work->info);
-  cv_cuSolver_check_cusolver_status(cusolver_status);
-  assert(cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
 #if PRINT_CUSOLVER_DEBUGGING
   std::cout << "Finished cv_cuSolver_Initialize" << std::endl;
